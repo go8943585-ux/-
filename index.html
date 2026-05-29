@@ -1,0 +1,1745 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario - 10 уровней</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .game-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        canvas {
+            border: 4px solid #333;
+            border-radius: 12px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), 0 0 80px rgba(255, 100, 50, 0.15);
+            image-rendering: auto;
+            max-width: 95vw;
+            max-height: 90vh;
+            background: #000;
+        }
+
+        .info-bar {
+            display: flex;
+            gap: 20px;
+            color: #fff;
+            font-size: 13px;
+            opacity: 0.7;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .info-bar span {
+            background: #2a2a3a;
+            padding: 6px 14px;
+            border-radius: 20px;
+        }
+
+        @media (max-width: 850px) {
+            canvas {
+                max-width: 100vw;
+                border-radius: 0;
+                border-left: none;
+                border-right: none;
+            }
+            .info-bar {
+                font-size: 11px;
+                gap: 8px;
+            }
+            .info-bar span {
+                padding: 4px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="game-wrapper">
+        <canvas id="game"></canvas>
+        <div class="info-bar">
+            <span>← → или A/D — движение</span>
+            <span>ПРОБЕЛ или W/↑ — прыжок</span>
+            <span>R — рестарт уровня</span>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('game');
+            const ctx = canvas.getContext('2d');
+
+            // Размеры канваса
+            const W = 800;
+            const H = 500;
+            canvas.width = W;
+            canvas.height = H;
+
+            // --- КОНСТАНТЫ ---
+            const GRAVITY = 0.55;
+            const PLAYER_SPEED = 4.5;
+            const JUMP_VELOCITY = -10.5;
+            const GROUND_Y = 400;
+            const PLAYER_W = 28;
+            const PLAYER_H = 38;
+            const ENEMY_W = 28;
+            const ENEMY_H = 28;
+            const COIN_SIZE = 18;
+            const MAX_LIVES = 3;
+            const INVINCIBLE_TIME = 120; // кадров неуязвимости
+
+            // --- ТЕМЫ ДЛЯ ГРУПП УРОВНЕЙ ---
+            const themes = [
+                { sky: '#5c94fc', skyTop: '#87ceeb', ground: '#6b8e23', groundDark: '#4a6b10',
+                    accent: '#8fbc3a', name: 'Grassland' },
+                { sky: '#3a2a4a', skyTop: '#5a3a6a', ground: '#6b4423', groundDark: '#4a2d14',
+                    accent: '#8b5e3c', name: 'Underground' },
+                { sky: '#e8943a', skyTop: '#f4b860', ground: '#5a7a3a', groundDark: '#3d5528',
+                    accent: '#7cb342', name: 'Athletic' },
+                { sky: '#2a1a1a', skyTop: '#4a2020', ground: '#3a3a3a', groundDark: '#1a1a1a',
+                    accent: '#666', name: 'Castle' },
+            ];
+
+            function getTheme(level) {
+                if (level <= 3) return themes[0];
+                if (level <= 6) return themes[1];
+                if (level <= 9) return themes[2];
+                return themes[3];
+            }
+
+            // --- ГЕНЕРАТОРЫ ДЛЯ УРОВНЕЙ ---
+            function coinLine(startX, y, count, spacing = 35) {
+                const arr = [];
+                for (let i = 0; i < count; i++) {
+                    arr.push({ x: startX + i * spacing, y, collected: false });
+                }
+                return arr;
+            }
+
+            function coinArc(startX, baseY, count, height = 60) {
+                const arr = [];
+                const totalWidth = (count - 1) * 40;
+                for (let i = 0; i < count; i++) {
+                    const t = i / (count - 1);
+                    const arcY = baseY - Math.sin(t * Math.PI) * height;
+                    arr.push({ x: startX + t * totalWidth, y: arcY, collected: false });
+                }
+                return arr;
+            }
+
+            function coinStack(x, baseY, count, spacing = 30) {
+                const arr = [];
+                for (let i = 0; i < count; i++) {
+                    arr.push({ x, y: baseY - i * spacing, collected: false });
+                }
+                return arr;
+            }
+
+            // --- ОПРЕДЕЛЕНИЯ 10 УРОВНЕЙ ---
+            function getLevelData(levelNum) {
+                const lvl = {
+                    width: 2400 + (levelNum - 1) * 400,
+                    groundHoles: [],
+                    platforms: [],
+                    enemies: [],
+                    coins: [],
+                    pipes: [],
+                    flagX: 2200 + (levelNum - 1) * 400,
+                    name: `Мир ${Math.ceil(levelNum/3)}-${((levelNum-1)%3)+1}`,
+                };
+
+                // Базовая настройка для каждого уровня
+                const w = lvl.width;
+                const gy = GROUND_Y;
+
+                switch (levelNum) {
+                    case 1:
+                        // Простой первый уровень
+                        lvl.width = 2400;
+                        lvl.flagX = 2200;
+                        lvl.groundHoles = [];
+                        lvl.platforms = [
+                            { x: 350, y: 330, w: 120, h: 18 },
+                            { x: 600, y: 280, w: 100, h: 18 },
+                            { x: 850, y: 310, w: 140, h: 18 },
+                            { x: 1200, y: 260, w: 160, h: 18 },
+                            { x: 1550, y: 320, w: 120, h: 18 },
+                            { x: 1800, y: 280, w: 130, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 450, y: gy - ENEMY_H, patrolL: 380, patrolR: 550 },
+                            { x: 900, y: gy - ENEMY_H, patrolL: 800, patrolR: 1000 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(200, 340, 5, 35),
+                            ...coinArc(500, gy - 20, 5, 50),
+                            ...coinLine(700, 260, 4, 35),
+                            ...coinArc(1100, gy - 20, 5, 55),
+                            ...coinLine(1400, 300, 4, 40),
+                            { x: 1700, y: 250, collected: false },
+                            { x: 1740, y: 230, collected: false },
+                            { x: 1780, y: 250, collected: false },
+                            ...coinLine(1900, 340, 4, 35),
+                        ];
+                        lvl.pipes = [
+                            { x: 700, h: 50 },
+                            { x: 1300, h: 65 },
+                        ];
+                        break;
+
+                    case 2:
+                        lvl.width = 2800;
+                        lvl.flagX = 2580;
+                        lvl.groundHoles = [
+                            { startX: 500, endX: 570 },
+                            { startX: 1100, endX: 1180 },
+                        ];
+                        lvl.platforms = [
+                            { x: 520, y: 340, w: 80, h: 18 },
+                            { x: 700, y: 300, w: 120, h: 18 },
+                            { x: 950, y: 270, w: 100, h: 18 },
+                            { x: 1120, y: 320, w: 90, h: 18 },
+                            { x: 1400, y: 280, w: 150, h: 18 },
+                            { x: 1700, y: 250, w: 130, h: 18 },
+                            { x: 2000, y: 300, w: 160, h: 18 },
+                            { x: 2300, y: 260, w: 120, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 300, y: gy - ENEMY_H, patrolL: 200, patrolR: 450 },
+                            { x: 750, y: gy - ENEMY_H, patrolL: 650, patrolR: 850 },
+                            { x: 1500, y: gy - ENEMY_H, patrolL: 1350, patrolR: 1600 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(150, 340, 6, 35),
+                            ...coinArc(600, gy - 25, 5, 50),
+                            ...coinLine(800, 260, 3, 40),
+                            ...coinArc(1300, gy - 25, 6, 60),
+                            ...coinLine(1600, 300, 4, 35),
+                            ...coinLine(2100, 280, 4, 40),
+                            ...coinStack(2450, gy - 20, 3, 30),
+                        ];
+                        lvl.pipes = [
+                            { x: 400, h: 45 },
+                            { x: 1600, h: 55 },
+                            { x: 2200, h: 70 },
+                        ];
+                        break;
+
+                    case 3:
+                        lvl.width = 3200;
+                        lvl.flagX = 2980;
+                        lvl.groundHoles = [
+                            { startX: 400, endX: 500 },
+                            { startX: 900, endX: 1020 },
+                            { startX: 1600, endX: 1720 },
+                        ];
+                        lvl.platforms = [
+                            { x: 420, y: 330, w: 100, h: 18 },
+                            { x: 650, y: 290, w: 110, h: 18 },
+                            { x: 920, y: 310, w: 130, h: 18 },
+                            { x: 1150, y: 260, w: 100, h: 18 },
+                            { x: 1400, y: 300, w: 140, h: 18 },
+                            { x: 1630, y: 280, w: 120, h: 18 },
+                            { x: 1900, y: 240, w: 160, h: 18 },
+                            { x: 2200, y: 290, w: 130, h: 18 },
+                            { x: 2500, y: 250, w: 140, h: 18 },
+                            { x: 2700, y: 300, w: 120, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 350, y: gy - ENEMY_H, patrolL: 250, patrolR: 380 },
+                            { x: 700, y: gy - ENEMY_H, patrolL: 600, patrolR: 800 },
+                            { x: 1200, y: gy - ENEMY_H, patrolL: 1050, patrolR: 1300 },
+                            { x: 1800, y: gy - ENEMY_H, patrolL: 1750, patrolR: 1900 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(100, 340, 8, 35),
+                            ...coinArc(550, gy - 20, 5, 45),
+                            ...coinLine(750, 260, 4, 35),
+                            ...coinArc(1050, gy - 20, 6, 55),
+                            ...coinLine(1350, 280, 5, 35),
+                            ...coinLine(2000, 220, 4, 40),
+                            ...coinStack(2600, gy - 20, 3, 30),
+                            ...coinArc(2800, gy - 25, 5, 50),
+                        ];
+                        lvl.pipes = [
+                            { x: 600, h: 50 },
+                            { x: 1500, h: 60 },
+                            { x: 2400, h: 75 },
+                        ];
+                        break;
+
+                    case 4:
+                        lvl.width = 3600;
+                        lvl.flagX = 3380;
+                        lvl.groundHoles = [
+                            { startX: 350, endX: 460 },
+                            { startX: 800, endX: 940 },
+                            { startX: 1500, endX: 1640 },
+                            { startX: 2100, endX: 2250 },
+                        ];
+                        lvl.platforms = [
+                            { x: 370, y: 320, w: 110, h: 18 },
+                            { x: 600, y: 280, w: 100, h: 18 },
+                            { x: 820, y: 310, w: 140, h: 18 },
+                            { x: 1050, y: 250, w: 120, h: 18 },
+                            { x: 1300, y: 290, w: 130, h: 18 },
+                            { x: 1520, y: 270, w: 140, h: 18 },
+                            { x: 1800, y: 230, w: 150, h: 18 },
+                            { x: 2120, y: 300, w: 160, h: 18 },
+                            { x: 2450, y: 250, w: 130, h: 18 },
+                            { x: 2700, y: 280, w: 140, h: 18 },
+                            { x: 3000, y: 240, w: 150, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 300, y: gy - ENEMY_H, patrolL: 200, patrolR: 340 },
+                            { x: 650, y: gy - ENEMY_H, patrolL: 550, patrolR: 750 },
+                            { x: 1100, y: gy - ENEMY_H, patrolL: 950, patrolR: 1200 },
+                            { x: 1700, y: gy - ENEMY_H, patrolL: 1650, patrolR: 1800 },
+                            { x: 2300, y: gy - ENEMY_H, patrolL: 2260, patrolR: 2400 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(120, 340, 6, 35),
+                            ...coinArc(500, gy - 20, 5, 50),
+                            ...coinLine(700, 260, 3, 40),
+                            ...coinArc(1000, gy - 25, 6, 55),
+                            ...coinLine(1400, 270, 4, 35),
+                            ...coinLine(1850, 210, 5, 35),
+                            ...coinStack(2600, gy - 20, 4, 28),
+                            ...coinArc(2900, gy - 20, 5, 50),
+                            ...coinLine(3200, 300, 4, 35),
+                        ];
+                        lvl.pipes = [
+                            { x: 500, h: 50 },
+                            { x: 1200, h: 60 },
+                            { x: 2000, h: 70 },
+                            { x: 2800, h: 80 },
+                        ];
+                        break;
+
+                    case 5:
+                        lvl.width = 4000;
+                        lvl.flagX = 3760;
+                        lvl.groundHoles = [
+                            { startX: 300, endX: 430 },
+                            { startX: 700, endX: 850 },
+                            { startX: 1300, endX: 1460 },
+                            { startX: 1900, endX: 2060 },
+                            { startX: 2500, endX: 2650 },
+                        ];
+                        lvl.platforms = [
+                            { x: 320, y: 310, w: 130, h: 18 },
+                            { x: 550, y: 270, w: 100, h: 18 },
+                            { x: 720, y: 320, w: 150, h: 18 },
+                            { x: 950, y: 250, w: 120, h: 18 },
+                            { x: 1200, y: 290, w: 110, h: 18 },
+                            { x: 1320, y: 260, w: 160, h: 18 },
+                            { x: 1600, y: 230, w: 140, h: 18 },
+                            { x: 1920, y: 300, w: 160, h: 18 },
+                            { x: 2200, y: 240, w: 150, h: 18 },
+                            { x: 2520, y: 280, w: 150, h: 18 },
+                            { x: 2800, y: 230, w: 140, h: 18 },
+                            { x: 3100, y: 270, w: 160, h: 18 },
+                            { x: 3400, y: 240, w: 140, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 280, y: gy - ENEMY_H, patrolL: 200, patrolR: 290 },
+                            { x: 600, y: gy - ENEMY_H, patrolL: 500, patrolR: 680 },
+                            { x: 1000, y: gy - ENEMY_H, patrolL: 860, patrolR: 1100 },
+                            { x: 1500, y: gy - ENEMY_H, patrolL: 1470, patrolR: 1600 },
+                            { x: 2100, y: gy - ENEMY_H, patrolL: 2070, patrolR: 2200 },
+                            { x: 2700, y: gy - ENEMY_H, patrolL: 2660, patrolR: 2800 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(100, 330, 7, 35),
+                            ...coinArc(450, gy - 20, 5, 48),
+                            ...coinLine(650, 250, 3, 40),
+                            ...coinArc(900, gy - 25, 7, 55),
+                            ...coinLine(1150, 270, 4, 35),
+                            ...coinLine(1650, 210, 5, 35),
+                            ...coinStack(2300, gy - 20, 4, 28),
+                            ...coinArc(2600, gy - 20, 5, 50),
+                            ...coinLine(3000, 250, 5, 35),
+                            ...coinStack(3500, gy - 20, 3, 30),
+                        ];
+                        lvl.pipes = [
+                            { x: 450, h: 55 },
+                            { x: 1100, h: 65 },
+                            { x: 1800, h: 70 },
+                            { x: 3000, h: 75 },
+                        ];
+                        break;
+
+                    case 6:
+                        lvl.width = 4400;
+                        lvl.flagX = 4160;
+                        lvl.groundHoles = [
+                            { startX: 250, endX: 400 },
+                            { startX: 650, endX: 820 },
+                            { startX: 1200, endX: 1380 },
+                            { startX: 1800, endX: 1980 },
+                            { startX: 2400, endX: 2580 },
+                            { startX: 3000, endX: 3180 },
+                        ];
+                        lvl.platforms = [
+                            { x: 270, y: 300, w: 140, h: 18 },
+                            { x: 500, y: 260, w: 100, h: 18 },
+                            { x: 670, y: 310, w: 170, h: 18 },
+                            { x: 900, y: 240, w: 130, h: 18 },
+                            { x: 1100, y: 280, w: 120, h: 18 },
+                            { x: 1220, y: 250, w: 180, h: 18 },
+                            { x: 1500, y: 220, w: 150, h: 18 },
+                            { x: 1820, y: 290, w: 180, h: 18 },
+                            { x: 2100, y: 230, w: 160, h: 18 },
+                            { x: 2420, y: 270, w: 180, h: 18 },
+                            { x: 2700, y: 220, w: 150, h: 18 },
+                            { x: 3020, y: 280, w: 180, h: 18 },
+                            { x: 3350, y: 230, w: 160, h: 18 },
+                            { x: 3650, y: 260, w: 150, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 240, y: gy - ENEMY_H, patrolL: 180, patrolR: 240 },
+                            { x: 550, y: gy - ENEMY_H, patrolL: 460, patrolR: 630 },
+                            { x: 950, y: gy - ENEMY_H, patrolL: 830, patrolR: 1050 },
+                            { x: 1400, y: gy - ENEMY_H, patrolL: 1390, patrolR: 1520 },
+                            { x: 2000, y: gy - ENEMY_H, patrolL: 1990, patrolR: 2120 },
+                            { x: 2600, y: gy - ENEMY_H, patrolL: 2590, patrolR: 2720 },
+                            { x: 3200, y: gy - ENEMY_H, patrolL: 3190, patrolR: 3320 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(80, 320, 8, 35),
+                            ...coinArc(400, gy - 20, 6, 50),
+                            ...coinLine(600, 240, 4, 38),
+                            ...coinArc(850, gy - 25, 7, 55),
+                            ...coinLine(1050, 260, 5, 35),
+                            ...coinLine(1550, 200, 5, 35),
+                            ...coinStack(2200, gy - 20, 4, 28),
+                            ...coinArc(2500, gy - 20, 6, 50),
+                            ...coinLine(2900, 250, 5, 35),
+                            ...coinStack(3500, gy - 20, 4, 28),
+                            ...coinArc(3800, gy - 25, 5, 48),
+                        ];
+                        lvl.pipes = [
+                            { x: 400, h: 55 },
+                            { x: 1000, h: 65 },
+                            { x: 1700, h: 70 },
+                            { x: 2300, h: 80 },
+                            { x: 3500, h: 75 },
+                        ];
+                        break;
+
+                    case 7:
+                        lvl.width = 4800;
+                        lvl.flagX = 4560;
+                        lvl.groundHoles = [
+                            { startX: 200, endX: 370 },
+                            { startX: 600, endX: 790 },
+                            { startX: 1100, endX: 1300 },
+                            { startX: 1700, endX: 1900 },
+                            { startX: 2300, endX: 2500 },
+                            { startX: 2900, endX: 3100 },
+                            { startX: 3500, endX: 3700 },
+                        ];
+                        lvl.platforms = [
+                            { x: 220, y: 290, w: 160, h: 18 },
+                            { x: 450, y: 250, w: 110, h: 18 },
+                            { x: 620, y: 300, w: 190, h: 18 },
+                            { x: 880, y: 230, w: 140, h: 18 },
+                            { x: 1120, y: 270, w: 200, h: 18 },
+                            { x: 1400, y: 210, w: 160, h: 18 },
+                            { x: 1720, y: 280, w: 200, h: 18 },
+                            { x: 2020, y: 220, w: 170, h: 18 },
+                            { x: 2320, y: 260, w: 200, h: 18 },
+                            { x: 2620, y: 210, w: 160, h: 18 },
+                            { x: 2920, y: 270, w: 200, h: 18 },
+                            { x: 3220, y: 220, w: 170, h: 18 },
+                            { x: 3520, y: 260, w: 200, h: 18 },
+                            { x: 3820, y: 220, w: 160, h: 18 },
+                            { x: 4100, y: 250, w: 180, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 200, y: gy - ENEMY_H, patrolL: 150, patrolR: 200 },
+                            { x: 500, y: gy - ENEMY_H, patrolL: 420, patrolR: 580 },
+                            { x: 900, y: gy - ENEMY_H, patrolL: 800, patrolR: 1000 },
+                            { x: 1350, y: gy - ENEMY_H, patrolL: 1310, patrolR: 1450 },
+                            { x: 1850, y: gy - ENEMY_H, patrolL: 1910, patrolR: 1980 },
+                            { x: 2500, y: gy - ENEMY_H, patrolL: 2510, patrolR: 2650 },
+                            { x: 3100, y: gy - ENEMY_H, patrolL: 3110, patrolR: 3250 },
+                            { x: 3700, y: gy - ENEMY_H, patrolL: 3710, patrolR: 3850 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(60, 310, 9, 35),
+                            ...coinArc(350, gy - 20, 6, 50),
+                            ...coinLine(550, 230, 5, 36),
+                            ...coinArc(800, gy - 25, 8, 55),
+                            ...coinLine(1000, 250, 5, 35),
+                            ...coinLine(1450, 190, 6, 35),
+                            ...coinStack(2100, gy - 20, 5, 26),
+                            ...coinArc(2400, gy - 20, 6, 50),
+                            ...coinLine(2800, 240, 5, 35),
+                            ...coinStack(3400, gy - 20, 4, 28),
+                            ...coinArc(3700, gy - 25, 6, 48),
+                            ...coinLine(4200, 230, 5, 35),
+                        ];
+                        lvl.pipes = [
+                            { x: 350, h: 55 },
+                            { x: 950, h: 65 },
+                            { x: 1600, h: 70 },
+                            { x: 2200, h: 80 },
+                            { x: 3300, h: 75 },
+                            { x: 4000, h: 85 },
+                        ];
+                        break;
+
+                    case 8:
+                        lvl.width = 5200;
+                        lvl.flagX = 4960;
+                        lvl.groundHoles = [
+                            { startX: 180, endX: 360 },
+                            { startX: 550, endX: 760 },
+                            { startX: 1050, endX: 1270 },
+                            { startX: 1600, endX: 1840 },
+                            { startX: 2200, endX: 2440 },
+                            { startX: 2800, endX: 3040 },
+                            { startX: 3400, endX: 3640 },
+                            { startX: 4000, endX: 4240 },
+                        ];
+                        lvl.platforms = [
+                            { x: 200, y: 280, w: 180, h: 18 },
+                            { x: 420, y: 240, w: 100, h: 18 },
+                            { x: 570, y: 290, w: 210, h: 18 },
+                            { x: 850, y: 220, w: 150, h: 18 },
+                            { x: 1070, y: 260, w: 220, h: 18 },
+                            { x: 1350, y: 200, w: 170, h: 18 },
+                            { x: 1620, y: 270, w: 240, h: 18 },
+                            { x: 1950, y: 210, w: 180, h: 18 },
+                            { x: 2220, y: 250, w: 240, h: 18 },
+                            { x: 2550, y: 200, w: 170, h: 18 },
+                            { x: 2820, y: 260, w: 240, h: 18 },
+                            { x: 3150, y: 210, w: 180, h: 18 },
+                            { x: 3420, y: 250, w: 240, h: 18 },
+                            { x: 3750, y: 200, w: 170, h: 18 },
+                            { x: 4020, y: 250, w: 240, h: 18 },
+                            { x: 4350, y: 210, w: 180, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 180, y: gy - ENEMY_H, patrolL: 140, patrolR: 180 },
+                            { x: 460, y: gy - ENEMY_H, patrolL: 380, patrolR: 530 },
+                            { x: 850, y: gy - ENEMY_H, patrolL: 770, patrolR: 930 },
+                            { x: 1300, y: gy - ENEMY_H, patrolL: 1280, patrolR: 1420 },
+                            { x: 1800, y: gy - ENEMY_H, patrolL: 1850, patrolR: 1950 },
+                            { x: 2400, y: gy - ENEMY_H, patrolL: 2450, patrolR: 2580 },
+                            { x: 3000, y: gy - ENEMY_H, patrolL: 3050, patrolR: 3180 },
+                            { x: 3600, y: gy - ENEMY_H, patrolL: 3650, patrolR: 3780 },
+                            { x: 4200, y: gy - ENEMY_H, patrolL: 4250, patrolR: 4380 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(50, 300, 10, 33),
+                            ...coinArc(330, gy - 20, 7, 50),
+                            ...coinLine(500, 220, 5, 36),
+                            ...coinArc(750, gy - 25, 8, 55),
+                            ...coinLine(950, 240, 6, 35),
+                            ...coinLine(1400, 180, 6, 35),
+                            ...coinStack(2050, gy - 20, 5, 26),
+                            ...coinArc(2350, gy - 20, 7, 50),
+                            ...coinLine(2700, 230, 6, 35),
+                            ...coinStack(3300, gy - 20, 5, 26),
+                            ...coinArc(3600, gy - 25, 6, 48),
+                            ...coinLine(4300, 220, 5, 35),
+                            ...coinStack(4700, gy - 20, 4, 28),
+                        ];
+                        lvl.pipes = [
+                            { x: 320, h: 55 },
+                            { x: 900, h: 65 },
+                            { x: 1500, h: 70 },
+                            { x: 2100, h: 80 },
+                            { x: 3200, h: 75 },
+                            { x: 3900, h: 85 },
+                            { x: 4500, h: 70 },
+                        ];
+                        break;
+
+                    case 9:
+                        lvl.width = 5600;
+                        lvl.flagX = 5360;
+                        lvl.groundHoles = [
+                            { startX: 150, endX: 350 },
+                            { startX: 500, endX: 730 },
+                            { startX: 1000, endX: 1240 },
+                            { startX: 1550, endX: 1810 },
+                            { startX: 2150, endX: 2410 },
+                            { startX: 2750, endX: 3010 },
+                            { startX: 3350, endX: 3610 },
+                            { startX: 3950, endX: 4210 },
+                            { startX: 4550, endX: 4810 },
+                        ];
+                        lvl.platforms = [
+                            { x: 170, y: 270, w: 200, h: 18 },
+                            { x: 400, y: 230, w: 90, h: 18 },
+                            { x: 520, y: 280, w: 230, h: 18 },
+                            { x: 820, y: 210, w: 160, h: 18 },
+                            { x: 1020, y: 250, w: 240, h: 18 },
+                            { x: 1320, y: 190, w: 180, h: 18 },
+                            { x: 1570, y: 260, w: 260, h: 18 },
+                            { x: 1900, y: 200, w: 190, h: 18 },
+                            { x: 2170, y: 240, w: 260, h: 18 },
+                            { x: 2500, y: 190, w: 180, h: 18 },
+                            { x: 2770, y: 250, w: 260, h: 18 },
+                            { x: 3100, y: 200, w: 190, h: 18 },
+                            { x: 3370, y: 240, w: 260, h: 18 },
+                            { x: 3700, y: 190, w: 180, h: 18 },
+                            { x: 3970, y: 240, w: 260, h: 18 },
+                            { x: 4300, y: 190, w: 180, h: 18 },
+                            { x: 4570, y: 240, w: 260, h: 18 },
+                            { x: 4900, y: 200, w: 180, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 160, y: gy - ENEMY_H, patrolL: 130, patrolR: 160 },
+                            { x: 420, y: gy - ENEMY_H, patrolL: 360, patrolR: 480 },
+                            { x: 800, y: gy - ENEMY_H, patrolL: 740, patrolR: 880 },
+                            { x: 1250, y: gy - ENEMY_H, patrolL: 1250, patrolR: 1380 },
+                            { x: 1750, y: gy - ENEMY_H, patrolL: 1820, patrolR: 1920 },
+                            { x: 2350, y: gy - ENEMY_H, patrolL: 2420, patrolR: 2550 },
+                            { x: 2950, y: gy - ENEMY_H, patrolL: 3020, patrolR: 3150 },
+                            { x: 3550, y: gy - ENEMY_H, patrolL: 3620, patrolR: 3750 },
+                            { x: 4150, y: gy - ENEMY_H, patrolL: 4220, patrolR: 4350 },
+                            { x: 4750, y: gy - ENEMY_H, patrolL: 4820, patrolR: 4950 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(40, 290, 11, 32),
+                            ...coinArc(310, gy - 20, 7, 50),
+                            ...coinLine(470, 210, 5, 36),
+                            ...coinArc(720, gy - 25, 9, 55),
+                            ...coinLine(920, 230, 6, 35),
+                            ...coinLine(1370, 170, 7, 35),
+                            ...coinStack(2000, gy - 20, 6, 25),
+                            ...coinArc(2300, gy - 20, 7, 50),
+                            ...coinLine(2650, 220, 6, 35),
+                            ...coinStack(3250, gy - 20, 5, 26),
+                            ...coinArc(3550, gy - 25, 7, 48),
+                            ...coinLine(4200, 210, 6, 35),
+                            ...coinStack(4650, gy - 20, 5, 26),
+                            ...coinArc(5000, gy - 25, 6, 45),
+                        ];
+                        lvl.pipes = [
+                            { x: 300, h: 55 },
+                            { x: 850, h: 65 },
+                            { x: 1450, h: 70 },
+                            { x: 2050, h: 80 },
+                            { x: 3150, h: 75 },
+                            { x: 3850, h: 85 },
+                            { x: 4450, h: 70 },
+                            { x: 5150, h: 80 },
+                        ];
+                        break;
+
+                    case 10:
+                        // Финальный замок — самый сложный
+                        lvl.width = 6200;
+                        lvl.flagX = 5960;
+                        lvl.name = 'Замок Боузера';
+                        lvl.groundHoles = [
+                            { startX: 120, endX: 340 },
+                            { startX: 480, endX: 730 },
+                            { startX: 980, endX: 1240 },
+                            { startX: 1500, endX: 1800 },
+                            { startX: 2100, endX: 2400 },
+                            { startX: 2700, endX: 3000 },
+                            { startX: 3300, endX: 3600 },
+                            { startX: 3900, endX: 4200 },
+                            { startX: 4500, endX: 4800 },
+                            { startX: 5100, endX: 5400 },
+                        ];
+                        lvl.platforms = [
+                            { x: 140, y: 260, w: 220, h: 18 },
+                            { x: 380, y: 220, w: 90, h: 18 },
+                            { x: 500, y: 270, w: 250, h: 18 },
+                            { x: 800, y: 200, w: 170, h: 18 },
+                            { x: 1000, y: 240, w: 260, h: 18 },
+                            { x: 1300, y: 180, w: 190, h: 18 },
+                            { x: 1520, y: 250, w: 300, h: 18 },
+                            { x: 1900, y: 190, w: 200, h: 18 },
+                            { x: 2120, y: 230, w: 300, h: 18 },
+                            { x: 2500, y: 180, w: 190, h: 18 },
+                            { x: 2720, y: 240, w: 300, h: 18 },
+                            { x: 3100, y: 190, w: 200, h: 18 },
+                            { x: 3320, y: 230, w: 300, h: 18 },
+                            { x: 3700, y: 180, w: 190, h: 18 },
+                            { x: 3920, y: 230, w: 300, h: 18 },
+                            { x: 4300, y: 180, w: 190, h: 18 },
+                            { x: 4520, y: 230, w: 300, h: 18 },
+                            { x: 4900, y: 180, w: 190, h: 18 },
+                            { x: 5120, y: 230, w: 300, h: 18 },
+                            { x: 5500, y: 190, w: 200, h: 18 },
+                        ];
+                        lvl.enemies = [
+                            { x: 140, y: gy - ENEMY_H, patrolL: 120, patrolR: 150 },
+                            { x: 400, y: gy - ENEMY_H, patrolL: 350, patrolR: 460 },
+                            { x: 780, y: gy - ENEMY_H, patrolL: 740, patrolR: 860 },
+                            { x: 1200, y: gy - ENEMY_H, patrolL: 1250, patrolR: 1360 },
+                            { x: 1700, y: gy - ENEMY_H, patrolL: 1810, patrolR: 1910 },
+                            { x: 2300, y: gy - ENEMY_H, patrolL: 2410, patrolR: 2530 },
+                            { x: 2900, y: gy - ENEMY_H, patrolL: 3010, patrolR: 3130 },
+                            { x: 3500, y: gy - ENEMY_H, patrolL: 3610, patrolR: 3730 },
+                            { x: 4100, y: gy - ENEMY_H, patrolL: 4210, patrolR: 4330 },
+                            { x: 4700, y: gy - ENEMY_H, patrolL: 4810, patrolR: 4930 },
+                            { x: 5300, y: gy - ENEMY_H, patrolL: 5410, patrolR: 5530 },
+                            { x: 5700, y: gy - ENEMY_H, patrolL: 5650, patrolR: 5800 },
+                        ];
+                        lvl.coins = [
+                            ...coinLine(30, 280, 12, 30),
+                            ...coinArc(300, gy - 20, 8, 50),
+                            ...coinLine(440, 200, 6, 35),
+                            ...coinArc(700, gy - 25, 10, 55),
+                            ...coinLine(900, 220, 7, 35),
+                            ...coinLine(1350, 160, 7, 35),
+                            ...coinStack(2000, gy - 20, 6, 24),
+                            ...coinArc(2250, gy - 20, 8, 50),
+                            ...coinLine(2600, 210, 7, 35),
+                            ...coinStack(3200, gy - 20, 6, 24),
+                            ...coinArc(3500, gy - 25, 7, 48),
+                            ...coinLine(4150, 200, 6, 35),
+                            ...coinStack(4600, gy - 20, 5, 26),
+                            ...coinArc(4900, gy - 25, 7, 45),
+                            ...coinLine(5400, 190, 6, 35),
+                            ...coinStack(5750, gy - 20, 5, 28),
+                        ];
+                        lvl.pipes = [
+                            { x: 280, h: 55 },
+                            { x: 820, h: 65 },
+                            { x: 1400, h: 70 },
+                            { x: 2000, h: 80 },
+                            { x: 3100, h: 75 },
+                            { x: 3800, h: 85 },
+                            { x: 4400, h: 70 },
+                            { x: 5050, h: 80 },
+                            { x: 5600, h: 90 },
+                        ];
+                        break;
+                }
+
+                return lvl;
+            }
+
+            // --- СОСТОЯНИЕ ИГРЫ ---
+            let currentLevel = 1;
+            let score = 0;
+            let lives = MAX_LIVES;
+            let levelData;
+            let player;
+            let enemies = [];
+            let coins = [];
+            let particles = [];
+            let camera = { x: 0, y: 0, targetX: 0 };
+            let gameState = 'playing'; // 'playing' | 'levelComplete' | 'dying' | 'gameOver' | 'victory'
+            let stateTimer = 0;
+            let levelTitleAlpha = 1;
+            let levelTitleTimer = 150;
+            let frameCount = 0;
+            let keys = {};
+            let coinCollectAnim = 0;
+
+            // --- КЛАСС ИГРОКА ---
+            class Player {
+                constructor() {
+                    this.reset();
+                }
+
+                reset() {
+                    this.x = 80;
+                    this.y = GROUND_Y - PLAYER_H;
+                    this.vx = 0;
+                    this.vy = 0;
+                    this.width = PLAYER_W;
+                    this.height = PLAYER_H;
+                    this.onGround = false;
+                    this.facingRight = true;
+                    this.animFrame = 0;
+                    this.animTimer = 0;
+                    this.invincible = 0;
+                    this.canJump = true;
+                    this.jumpBuffer = 0;
+                    this.coyoteTime = 0;
+                }
+
+                update() {
+                    // Неуязвимость
+                    if (this.invincible > 0) this.invincible--;
+
+                    // Буфер прыжка и койот-тайм
+                    if (this.jumpBuffer > 0) this.jumpBuffer--;
+                    if (this.coyoteTime > 0 && !this.onGround) this.coyoteTime--;
+                    if (this.onGround) this.coyoteTime = 8;
+
+                    // Горизонтальное движение
+                    if (keys['ArrowLeft'] || keys['KeyA']) {
+                        this.vx = -PLAYER_SPEED;
+                        this.facingRight = false;
+                    } else if (keys['ArrowRight'] || keys['KeyD']) {
+                        this.vx = PLAYER_SPEED;
+                        this.facingRight = true;
+                    } else {
+                        this.vx *= 0.75;
+                        if (Math.abs(this.vx) < 0.3) this.vx = 0;
+                    }
+
+                    // Прыжок
+                    if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && this.coyoteTime > 0 && this
+                        .canJump) {
+                        this.vy = JUMP_VELOCITY;
+                        this.onGround = false;
+                        this.coyoteTime = 0;
+                        this.canJump = false;
+                        this.jumpBuffer = 0;
+                    }
+                    if (!(keys['Space'] || keys['ArrowUp'] || keys['KeyW'])) {
+                        this.canJump = true;
+                    }
+                    // Прыжок с буфером
+                    if (this.jumpBuffer > 0 && this.onGround && this.canJump) {
+                        this.vy = JUMP_VELOCITY;
+                        this.onGround = false;
+                        this.canJump = false;
+                        this.jumpBuffer = 0;
+                        this.coyoteTime = 0;
+                    }
+                    if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && !this.canJump && this.onGround ===
+                        false && this.jumpBuffer === 0) {
+                        this.jumpBuffer = 8;
+                    }
+
+                    // Переменная высота прыжка
+                    if (!(keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && this.vy < -4) {
+                        this.vy *= 0.85;
+                    }
+
+                    // Гравитация
+                    this.vy += GRAVITY;
+                    if (this.vy > 14) this.vy = 14;
+
+                    // Движение
+                    this.x += this.vx;
+                    this.y += this.vy;
+
+                    // Границы мира
+                    if (this.x < 0) this.x = 0;
+                    if (this.x > levelData.width - this.width) this.x = levelData.width - this.width;
+
+                    // Проверка падения в пропасть
+                    if (this.y > H + 100) {
+                        this.die();
+                    }
+
+                    // Коллизия с землёй
+                    this.onGround = false;
+                    this.checkGroundCollision();
+                    // Коллизия с платформами
+                    this.checkPlatformCollision();
+                    // Коллизия с трубами
+                    this.checkPipeCollision();
+
+                    // Анимация
+                    if (Math.abs(this.vx) > 0.5 && this.onGround) {
+                        this.animTimer++;
+                        if (this.animTimer > 7) {
+                            this.animTimer = 0;
+                            this.animFrame = (this.animFrame + 1) % 4;
+                        }
+                    } else if (this.onGround) {
+                        this.animFrame = 0;
+                        this.animTimer = 0;
+                    }
+                    if (!this.onGround) {
+                        this.animFrame = 2;
+                    }
+
+                    // Обновление камеры
+                    camera.targetX = this.x - W / 3;
+                    if (camera.targetX < 0) camera.targetX = 0;
+                    if (camera.targetX > levelData.width - W) camera.targetX = levelData.width - W;
+                }
+
+                checkGroundCollision() {
+                    const feetY = this.y + this.height;
+                    const prevFeetY = feetY - this.vy;
+
+                    // Проверяем, находится ли игрок над землёй
+                    if (feetY >= GROUND_Y && prevFeetY <= GROUND_Y + 2) {
+                        // Проверяем, есть ли земля под игроком
+                        const onGroundSegment = this.isOnGroundSegment(this.x, this.x + this.width);
+                        if (onGroundSegment) {
+                            this.y = GROUND_Y - this.height;
+                            this.vy = 0;
+                            this.onGround = true;
+                        }
+                    } else if (feetY >= GROUND_Y && this.onGround) {
+                        const onGroundSegment = this.isOnGroundSegment(this.x, this.x + this.width);
+                        if (onGroundSegment) {
+                            this.y = GROUND_Y - this.height;
+                            this.vy = 0;
+                            this.onGround = true;
+                        } else {
+                            this.onGround = false;
+                        }
+                    }
+                }
+
+                isOnGroundSegment(left, right) {
+                    // Проверяем все дыры — если игрок полностью в дыре, земли нет
+                    for (const hole of levelData.groundHoles) {
+                        if (left >= hole.startX - 2 && right <= hole.endX + 2) {
+                            return false;
+                        }
+                        // Частично в дыре
+                        if (right > hole.startX && left < hole.endX) {
+                            const overlapLeft = Math.max(left, hole.startX);
+                            const overlapRight = Math.min(right, hole.endX);
+                            const overlapWidth = overlapRight - overlapLeft;
+                            const totalWidth = right - left;
+                            if (overlapWidth > totalWidth * 0.6) return false;
+                        }
+                    }
+                    return true;
+                }
+
+                checkPlatformCollision() {
+                    for (const plat of levelData.platforms) {
+                        // Односторонняя платформа (только сверху)
+                        const prevBottom = this.y + this.height - this.vy;
+                        if (this.vy >= 0 &&
+                            prevBottom <= plat.y + 2 &&
+                            this.y + this.height >= plat.y &&
+                            this.y + this.height <= plat.y + plat.h + 10 &&
+                            this.x + this.width > plat.x + 4 &&
+                            this.x < plat.x + plat.w - 4) {
+                            this.y = plat.y - this.height;
+                            this.vy = 0;
+                            this.onGround = true;
+                        }
+                    }
+                }
+
+                checkPipeCollision() {
+                    for (const pipe of levelData.pipes) {
+                        const pipeY = GROUND_Y - pipe.h;
+                        const pipeRect = {
+                            x: pipe.x,
+                            y: pipeY,
+                            w: 40,
+                            h: pipe.h,
+                        };
+
+                        // Проверка коллизии со всех сторон
+                        if (
+                            this.x + this.width > pipeRect.x + 3 &&
+                            this.x < pipeRect.x + pipeRect.w - 3 &&
+                            this.y + this.height > pipeRect.y &&
+                            this.y < pipeRect.y + pipeRect.h
+                        ) {
+                            const overlapLeft = (this.x + this.width) - pipeRect.x;
+                            const overlapRight = (pipeRect.x + pipeRect.w) - this.x;
+                            const overlapTop = (this.y + this.height) - pipeRect.y;
+                            const overlapBottom = (pipeRect.y + pipeRect.h) - this.y;
+
+                            const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                            if (minOverlap === overlapTop && this.vy >= 0) {
+                                this.y = pipeRect.y - this.height;
+                                this.vy = 0;
+                                this.onGround = true;
+                            } else if (minOverlap === overlapBottom && this.vy < 0) {
+                                this.y = pipeRect.y + pipeRect.h;
+                                this.vy = 0;
+                            } else if (minOverlap === overlapLeft) {
+                                this.x = pipeRect.x - this.width;
+                                this.vx = 0;
+                            } else if (minOverlap === overlapRight) {
+                                this.x = pipeRect.x + pipeRect.w;
+                                this.vx = 0;
+                            }
+                        }
+                    }
+                }
+
+                die() {
+                    if (this.invincible > 0) return;
+                    lives--;
+                    if (lives <= 0) {
+                        gameState = 'gameOver';
+                        stateTimer = 180;
+                    } else {
+                        gameState = 'dying';
+                        stateTimer = 60;
+                        this.invincible = 60;
+                    }
+                }
+
+                draw(ctx, camX) {
+                    if (this.invincible > 0 && Math.floor(this.invincible / 3) % 2 === 0) return;
+
+                    const sx = this.x - camX;
+                    const sy = this.y;
+
+                    ctx.save();
+                    if (!this.facingRight) {
+                        ctx.translate(sx + this.width / 2, 0);
+                        ctx.scale(-1, 1);
+                        ctx.translate(-(sx + this.width / 2), 0);
+                    }
+
+                    // Тело (красная рубашка)
+                    ctx.fillStyle = '#e52521';
+                    ctx.fillRect(sx + 4, sy + 14, this.width - 8, 16);
+
+                    // Голова
+                    ctx.fillStyle = '#fbbf8c';
+                    ctx.beginPath();
+                    ctx.arc(sx + this.width / 2, sy + 10, 9, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Кепка
+                    ctx.fillStyle = '#e52521';
+                    ctx.fillRect(sx + 2, sy + 1, this.width - 2, 9);
+                    ctx.fillRect(sx + this.width - 6, sy + 6, 10, 6);
+
+                    // Глаз
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    ctx.arc(sx + this.width - 9, sy + 9, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Комбинезон (синий)
+                    ctx.fillStyle = '#1a5fdc';
+                    ctx.fillRect(sx + 5, sy + 24, this.width - 10, 10);
+
+                    // Ноги
+                    const legOffset = this.onGround ? Math.sin(this.animFrame * Math.PI / 2) * 3 : 1;
+                    ctx.fillStyle = '#1a5fdc';
+                    ctx.fillRect(sx + 5, sy + 32, 7, 6 + legOffset);
+                    ctx.fillRect(sx + this.width - 12, sy + 32, 7, 6 - legOffset);
+
+                    // Ботинки
+                    ctx.fillStyle = '#6b3300';
+                    ctx.fillRect(sx + 3, sy + 35 + legOffset, 10, 5);
+                    ctx.fillRect(sx + this.width - 14, sy + 35 - legOffset, 10, 5);
+
+                    ctx.restore();
+                }
+            }
+
+            // --- КЛАСС ВРАГА ---
+            class Enemy {
+                constructor(x, y, patrolL, patrolR) {
+                    this.x = x;
+                    this.y = y;
+                    this.width = ENEMY_W;
+                    this.height = ENEMY_H;
+                    this.vx = 1.2 + Math.random() * 0.6;
+                    this.patrolL = patrolL;
+                    this.patrolR = patrolR;
+                    this.alive = true;
+                    this.deathTimer = 0;
+                }
+
+                update() {
+                    if (!this.alive) {
+                        this.deathTimer--;
+                        return;
+                    }
+                    this.x += this.vx;
+                    if (this.x <= this.patrolL || this.x + this.width >= this.patrolR) {
+                        this.vx *= -1;
+                    }
+                    // Падение в пропасть
+                    if (this.y > H + 50) {
+                        this.alive = false;
+                        this.deathTimer = 20;
+                    }
+                    // Проверка на землю под врагом
+                    const onGround = this.checkHasGround();
+                    if (!onGround && this.y < GROUND_Y + 50) {
+                        this.y += 3;
+                    }
+                }
+
+                checkHasGround() {
+                    const left = this.x;
+                    const right = this.x + this.width;
+                    if (this.y + this.height >= GROUND_Y) {
+                        for (const hole of levelData.groundHoles) {
+                            if (left >= hole.startX - 2 && right <= hole.endX + 2) return false;
+                            const overlapLeft = Math.max(left, hole.startX);
+                            const overlapRight = Math.min(right, hole.endX);
+                            if ((overlapRight - overlapLeft) > (right - left) * 0.5) return false;
+                        }
+                        return true;
+                    }
+                    // Проверка платформ
+                    for (const plat of levelData.platforms) {
+                        if (this.y + this.height >= plat.y && this.y + this.height <= plat.y + plat.h + 5 &&
+                            right > plat.x && left < plat.x + plat.w) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                draw(ctx, camX) {
+                    if (!this.alive && this.deathTimer <= 0) return;
+                    const sx = this.x - camX;
+                    const sy = this.y;
+
+                    if (!this.alive) {
+                        // Сплющенный враг
+                        ctx.fillStyle = '#8b4513';
+                        ctx.fillRect(sx, sy + this.height - 6, this.width, 6);
+                        return;
+                    }
+
+                    // Тело гоомбы
+                    ctx.fillStyle = '#c4843b';
+                    ctx.beginPath();
+                    ctx.arc(sx + this.width / 2, sy + this.height / 2, this.width / 2, Math.PI, 0);
+                    ctx.fill();
+                    ctx.fillRect(sx, sy + this.height / 2, this.width, this.height / 2);
+
+                    // Голова
+                    ctx.fillStyle = '#a0522d';
+                    ctx.beginPath();
+                    ctx.arc(sx + this.width / 2, sy + 8, 11, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Глаза
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath();
+                    ctx.arc(sx + 8, sy + 6, 4.5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.arc(sx + this.width - 8, sy + 6, 4.5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    ctx.arc(sx + 9, sy + 6, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.arc(sx + this.width - 7, sy + 6, 2, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Ноги
+                    ctx.fillStyle = '#6b3300';
+                    const legAnim = Math.sin(frameCount * 0.2) * 2;
+                    ctx.fillRect(sx + 3, sy + this.height - 7, 8, 7 + legAnim);
+                    ctx.fillRect(sx + this.width - 11, sy + this.height - 7, 8, 7 - legAnim);
+                }
+            }
+
+            // --- КЛАСС ЧАСТИЦ ---
+            class Particle {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.vx = (Math.random() - 0.5) * 4;
+                    this.vy = -Math.random() * 6 - 2;
+                    this.life = 25 + Math.random() * 20;
+                    this.maxLife = this.life;
+                    this.color = color;
+                    this.size = 2 + Math.random() * 3;
+                }
+
+                update() {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.vy += 0.2;
+                    this.life--;
+                }
+
+                draw(ctx, camX) {
+                    const alpha = this.life / this.maxLife;
+                    ctx.fillStyle = this.color;
+                    ctx.globalAlpha = alpha;
+                    ctx.beginPath();
+                    ctx.arc(this.x - camX, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+
+                get dead() { return this.life <= 0; }
+            }
+
+            // --- ЗАГРУЗКА УРОВНЯ ---
+            function loadLevel(num) {
+                currentLevel = num;
+                levelData = getLevelData(num);
+                player = new Player();
+                player.x = 60;
+                player.y = GROUND_Y - PLAYER_H;
+
+                enemies = levelData.enemies.map(e => new Enemy(e.x, e.y, e.patrolL, e.patrolR));
+                coins = levelData.coins.map(c => ({ ...c, collected: false }));
+                particles = [];
+                camera.x = 0;
+                camera.targetX = 0;
+                gameState = 'playing';
+                stateTimer = 0;
+                levelTitleAlpha = 1;
+                levelTitleTimer = 150;
+                coinCollectAnim = 0;
+            }
+
+            function resetLevel() {
+                loadLevel(currentLevel);
+                if (gameState === 'gameOver') {
+                    lives = MAX_LIVES;
+                    score = 0;
+                    loadLevel(1);
+                }
+            }
+
+            // --- ОТРИСОВКА ---
+            function drawBackground(theme) {
+                // Небо
+                const grad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+                grad.addColorStop(0, theme.skyTop);
+                grad.addColorStop(1, theme.sky);
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, W, GROUND_Y);
+
+                // Облака (параллакс)
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                const cloudPositions = [100, 400, 700, 1100, 1500, 1900, 2300, 2800, 3300, 3800, 4300, 5000, 5500];
+                for (const cx of cloudPositions) {
+                    const sx = cx - camera.x * 0.3;
+                    if (sx > -150 && sx < W + 150) {
+                        drawCloud(sx, 40 + (cx % 80), 1 + (cx % 3) * 0.3);
+                    }
+                }
+
+                // Холмы (параллакс)
+                ctx.fillStyle = theme.accent;
+                const hillPositions = [0, 350, 750, 1200, 1700, 2200, 2800, 3400, 4000, 4700, 5300];
+                for (const hx of hillPositions) {
+                    const sx = hx - camera.x * 0.5;
+                    if (sx > -200 && sx < W + 200) {
+                        ctx.beginPath();
+                        ctx.arc(sx, GROUND_Y, 80 + (hx % 120), Math.PI, 0);
+                        ctx.fill();
+                    }
+                }
+
+                // Кусты
+                ctx.fillStyle = theme.ground;
+                const bushPositions = [150, 550, 950, 1400, 1850, 2350, 2900, 3500, 4100, 4700, 5300, 5800];
+                for (const bx of bushPositions) {
+                    const sx = bx - camera.x * 0.7;
+                    if (sx > -80 && sx < W + 80) {
+                        ctx.beginPath();
+                        ctx.arc(sx, GROUND_Y, 25, Math.PI, 0);
+                        ctx.arc(sx + 20, GROUND_Y, 20, Math.PI, 0);
+                        ctx.arc(sx - 20, GROUND_Y, 18, Math.PI, 0);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            function drawCloud(x, y, scale) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.scale(scale, scale);
+                ctx.beginPath();
+                ctx.arc(0, 0, 25, 0, Math.PI * 2);
+                ctx.arc(30, -10, 30, 0, Math.PI * 2);
+                ctx.arc(60, 0, 25, 0, Math.PI * 2);
+                ctx.arc(30, 10, 28, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            function drawGround(theme) {
+                // Земля
+                const groundTop = GROUND_Y;
+                ctx.fillStyle = theme.ground;
+                ctx.fillRect(0, groundTop, W, H - groundTop);
+
+                // Трава (верхняя полоса)
+                ctx.fillStyle = theme.accent;
+                ctx.fillRect(0, groundTop, W, 6);
+
+                // Текстура земли
+                ctx.fillStyle = theme.groundDark;
+                for (let i = 0; i < W; i += 40) {
+                    ctx.fillRect(i + 10, groundTop + 15, 18, 3);
+                    ctx.fillRect(i + 25, groundTop + 30, 12, 3);
+                }
+
+                // Дыры в земле (пропасти)
+                ctx.fillStyle = '#1a0a00';
+                for (const hole of levelData.groundHoles) {
+                    const sx = hole.startX - camera.x;
+                    const sw = hole.endX - hole.startX;
+                    if (sx < W && sx + sw > 0) {
+                        const visibleSx = Math.max(0, sx);
+                        const visibleSw = Math.min(W, sx + sw) - visibleSx;
+                        ctx.fillRect(visibleSx, groundTop, visibleSw, H - groundTop);
+                        // Эффект глубины
+                        const depthGrad = ctx.createLinearGradient(0, groundTop, 0, H);
+                        depthGrad.addColorStop(0, '#0a0500');
+                        depthGrad.addColorStop(1, '#000');
+                        ctx.fillStyle = depthGrad;
+                        ctx.fillRect(visibleSx, groundTop, visibleSw, H - groundTop);
+                    }
+                }
+            }
+
+            function drawPlatforms(theme) {
+                for (const plat of levelData.platforms) {
+                    const sx = plat.x - camera.x;
+                    if (sx > W + 50 || sx + plat.w < -50) continue;
+                    // Тень
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                    ctx.fillRect(sx + 2, plat.y + 2, plat.w, plat.h);
+                    // Платформа
+                    ctx.fillStyle = '#c4956b';
+                    ctx.fillRect(sx, plat.y, plat.w, plat.h);
+                    ctx.fillStyle = '#d4a57b';
+                    ctx.fillRect(sx, plat.y, plat.w, plat.h / 2);
+                    ctx.fillStyle = '#8b6914';
+                    ctx.fillRect(sx, plat.y, plat.w, 3);
+                }
+            }
+
+            function drawPipes(theme) {
+                for (const pipe of levelData.pipes) {
+                    const sx = pipe.x - camera.x;
+                    if (sx > W + 80 || sx + 40 < -80) continue;
+                    const pipeY = GROUND_Y - pipe.h;
+                    // Тело трубы
+                    ctx.fillStyle = '#3a8c3a';
+                    ctx.fillRect(sx, pipeY, 40, pipe.h);
+                    // Ободок
+                    ctx.fillStyle = '#4aac4a';
+                    ctx.fillRect(sx - 4, pipeY, 48, 14);
+                    ctx.fillStyle = '#5acc5a';
+                    ctx.fillRect(sx - 4, pipeY, 48, 5);
+                    // Тень
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                    ctx.fillRect(sx + 30, pipeY, 12, pipe.h);
+                }
+            }
+
+            function drawFlag(camX) {
+                const fx = levelData.flagX;
+                const sx = fx - camX;
+                if (sx < -50 || sx > W + 50) return;
+                // Шест
+                ctx.fillStyle = '#555';
+                ctx.fillRect(sx + 3, GROUND_Y - 180, 6, 180);
+                // Шарик наверху
+                ctx.fillStyle = '#4caf50';
+                ctx.beginPath();
+                ctx.arc(sx + 6, GROUND_Y - 180, 10, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(sx + 6, GROUND_Y - 180, 5, 0, Math.PI * 2);
+                ctx.fill();
+                // Флаг
+                const wave = Math.sin(frameCount * 0.05) * 4;
+                ctx.fillStyle = '#e52521';
+                ctx.beginPath();
+                ctx.moveTo(sx + 6, GROUND_Y - 175);
+                ctx.lineTo(sx + 45 + wave, GROUND_Y - 155);
+                ctx.lineTo(sx + 40 + wave, GROUND_Y - 145);
+                ctx.lineTo(sx + 6, GROUND_Y - 135);
+                ctx.closePath();
+                ctx.fill();
+                // Звезда на флаге
+                ctx.fillStyle = '#ffd700';
+                ctx.font = '18px sans-serif';
+                ctx.fillText('⭐', sx + 12 + wave / 2, GROUND_Y - 148);
+            }
+
+            function drawCoins(camX) {
+                for (const coin of coins) {
+                    if (coin.collected) continue;
+                    const sx = coin.x - camX;
+                    if (sx > W + 30 || sx < -30) continue;
+                    const bob = Math.sin(frameCount * 0.06 + coin.x * 0.03) * 4;
+                    const cy = coin.y + bob;
+
+                    // Свечение
+                    ctx.fillStyle = 'rgba(255,215,0,0.3)';
+                    ctx.beginPath();
+                    ctx.arc(sx + COIN_SIZE / 2, cy + COIN_SIZE / 2, COIN_SIZE / 2 + 3, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Монета
+                    const coinWidth = COIN_SIZE * Math.abs(Math.cos(frameCount * 0.08 + coin.x * 0.02));
+                    if (coinWidth > 1) {
+                        ctx.fillStyle = '#ffd700';
+                        ctx.beginPath();
+                        ctx.ellipse(sx + COIN_SIZE / 2, cy + COIN_SIZE / 2, Math.max(coinWidth, COIN_SIZE / 2),
+                            COIN_SIZE / 2, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.fillStyle = '#ffec80';
+                        ctx.beginPath();
+                        ctx.ellipse(sx + COIN_SIZE / 2, cy + COIN_SIZE / 2, Math.max(coinWidth - 3, COIN_SIZE / 2 -
+                            3), COIN_SIZE / 2 - 3, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.fillStyle = '#daa520';
+                        ctx.font = 'bold 12px sans-serif';
+                        ctx.fillText('$', sx + COIN_SIZE / 2 - 5, cy + COIN_SIZE / 2 + 5);
+                    }
+                }
+            }
+
+            function drawHUD() {
+                // Фон HUD
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillRect(0, 0, W, 40);
+
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 16px "Segoe UI", sans-serif';
+                ctx.fillText(`Уровень: ${currentLevel}/10`, 20, 28);
+                ctx.fillText(`Очки: ${score}`, 200, 28);
+                ctx.fillText(`Жизни: ${'❤️'.repeat(lives)}`, 420, 28);
+                ctx.fillText(levelData.name, 620, 28);
+            }
+
+            function drawLevelTitle() {
+                if (levelTitleTimer > 0 && levelTitleAlpha > 0.01) {
+                    const alpha = Math.min(levelTitleAlpha, 1);
+                    ctx.fillStyle = `rgba(0,0,0,${alpha * 0.6})`;
+                    ctx.fillRect(0, H / 2 - 50, W, 100);
+                    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                    ctx.font = 'bold 36px "Segoe UI", sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(levelData.name, W / 2, H / 2 + 12);
+                    ctx.textAlign = 'start';
+                    if (levelTitleTimer < 40) {
+                        levelTitleAlpha -= 0.025;
+                    }
+                }
+            }
+
+            function drawGameOver() {
+                ctx.fillStyle = 'rgba(0,0,0,0.75)';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#e52521';
+                ctx.font = 'bold 48px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('ИГРА ОКОНЧЕНА', W / 2, H / 2 - 10);
+                ctx.fillStyle = '#fff';
+                ctx.font = '20px "Segoe UI", sans-serif';
+                ctx.fillText('Нажмите R для перезапуска', W / 2, H / 2 + 40);
+                ctx.fillText(`Финальный счёт: ${score}`, W / 2, H / 2 + 70);
+                ctx.textAlign = 'start';
+            }
+
+            function drawVictory() {
+                ctx.fillStyle = 'rgba(0,0,0,0.75)';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#ffd700';
+                ctx.font = 'bold 44px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('🎉 ПОБЕДА! 🎉', W / 2, H / 2 - 30);
+                ctx.fillStyle = '#fff';
+                ctx.font = '22px "Segoe UI", sans-serif';
+                ctx.fillText('Вы прошли все 10 уровней!', W / 2, H / 2 + 20);
+                ctx.fillText(`Итоговый счёт: ${score}`, W / 2, H / 2 + 55);
+                ctx.fillText('Нажмите R чтобы сыграть снова', W / 2, H / 2 + 90);
+                ctx.textAlign = 'start';
+            }
+
+            function drawLevelComplete() {
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(0, H / 2 - 35, W, 70);
+                ctx.fillStyle = '#ffd700';
+                ctx.font = 'bold 30px "Segoe UI", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('✨ УРОВЕНЬ ПРОЙДЕН! ✨', W / 2, H / 2 + 10);
+                ctx.textAlign = 'start';
+            }
+
+            // --- ИГРОВОЙ ЦИКЛ ---
+            function update() {
+                frameCount++;
+
+                if (gameState === 'playing') {
+                    player.update();
+
+                    // Обновление врагов
+                    for (const enemy of enemies) {
+                        enemy.update();
+                        if (!enemy.alive && enemy.deathTimer <= 0) continue;
+                        if (!enemy.alive) continue;
+
+                        // Коллизия игрока с врагом
+                        if (player.invincible <= 0 &&
+                            player.x + player.width > enemy.x + 4 &&
+                            player.x < enemy.x + enemy.width - 4 &&
+                            player.y + player.height > enemy.y &&
+                            player.y < enemy.y + enemy.height) {
+
+                            // Проверка — прыгает ли игрок на врага сверху
+                            const playerBottom = player.y + player.height;
+                            const enemyTop = enemy.y;
+                            const prevPlayerBottom = playerBottom - player.vy;
+
+                            if (player.vy > 0 && prevPlayerBottom <= enemyTop + 6) {
+                                // Топтание врага
+                                enemy.alive = false;
+                                enemy.deathTimer = 25;
+                                player.vy = -7;
+                                score += 100;
+                                // Частицы
+                                for (let i = 0; i < 8; i++) {
+                                    particles.push(new Particle(enemy.x + enemy.width / 2, enemy.y + enemy.height /
+                                        2, '#ffd700'));
+                                }
+                            } else {
+                                // Игрок получает урон
+                                player.die();
+                            }
+                        }
+                    }
+
+                    // Сбор монет
+                    for (const coin of coins) {
+                        if (coin.collected) continue;
+                        const cx = coin.x + COIN_SIZE / 2;
+                        const cy = coin.y + COIN_SIZE / 2;
+                        const px = player.x + player.width / 2;
+                        const py = player.y + player.height / 2;
+                        const dist = Math.sqrt((cx - px) ** 2 + (cy - py) ** 2);
+                        if (dist < 28) {
+                            coin.collected = true;
+                            score += 50;
+                            coinCollectAnim = 10;
+                            for (let i = 0; i < 5; i++) {
+                                particles.push(new Particle(cx, cy, '#ffd700'));
+                            }
+                        }
+                    }
+
+                    // Проверка флага
+                    const flagDist = Math.abs(player.x + player.width / 2 - levelData.flagX);
+                    if (flagDist < 35 && player.y + player.height >= GROUND_Y - 190 && player.y < GROUND_Y) {
+                        if (currentLevel >= 10) {
+                            gameState = 'victory';
+                            stateTimer = 999;
+                            score += 500;
+                        } else {
+                            gameState = 'levelComplete';
+                            stateTimer = 90;
+                            score += 200;
+                        }
+                    }
+
+                    // Обновление частиц
+                    for (const p of particles) p.update();
+                    particles = particles.filter(p => !p.dead);
+
+                    // Плавная камера
+                    camera.x += (camera.targetX - camera.x) * 0.1;
+                    if (Math.abs(camera.targetX - camera.x) < 0.5) camera.x = camera.targetX;
+
+                    // Таймер названия уровня
+                    if (levelTitleTimer > 0) levelTitleTimer--;
+                    if (levelTitleTimer === 0 && levelTitleAlpha > 0) levelTitleAlpha -= 0.03;
+
+                } else if (gameState === 'dying') {
+                    stateTimer--;
+                    player.vy += GRAVITY;
+                    player.y += player.vy;
+                    if (stateTimer <= 0) {
+                        loadLevel(currentLevel);
+                    }
+                } else if (gameState === 'levelComplete') {
+                    stateTimer--;
+                    if (stateTimer <= 0) {
+                        loadLevel(currentLevel + 1);
+                    }
+                } else if (gameState === 'gameOver') {
+                    stateTimer--;
+                } else if (gameState === 'victory') {
+                    // Просто ждём
+                }
+
+                // Обработка клавиши R
+                if (keys['KeyR'] && (gameState === 'gameOver' || gameState === 'victory')) {
+                    keys['KeyR'] = false;
+                    lives = MAX_LIVES;
+                    score = 0;
+                    loadLevel(1);
+                } else if (keys['KeyR'] && gameState === 'playing') {
+                    keys['KeyR'] = false;
+                    resetLevel();
+                }
+            }
+
+            function draw() {
+                const theme = getTheme(currentLevel);
+                ctx.clearRect(0, 0, W, H);
+
+                drawBackground(theme);
+                drawGround(theme);
+                drawPlatforms(theme);
+                drawPipes(theme);
+                drawFlag(camera.x);
+                drawCoins(camera.x);
+
+                // Враги
+                for (const enemy of enemies) {
+                    if (enemy.alive || enemy.deathTimer > 0) {
+                        enemy.draw(ctx, camera.x);
+                    }
+                }
+
+                // Игрок
+                if (gameState !== 'dying' || stateTimer > 0) {
+                    player.draw(ctx, camera.x);
+                }
+
+                // Частицы
+                for (const p of particles) p.draw(ctx, camera.x);
+
+                // HUD
+                drawHUD();
+                drawLevelTitle();
+
+                if (gameState === 'levelComplete') drawLevelComplete();
+                if (gameState === 'gameOver') drawGameOver();
+                if (gameState === 'victory') drawVictory();
+            }
+
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- ОБРАБОТЧИКИ ВВОДА ---
+            window.addEventListener('keydown', (e) => {
+                keys[e.code] = true;
+                if (e.code === 'Space' || e.code === 'ArrowUp') {
+                    e.preventDefault();
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                keys[e.code] = false;
+            });
+
+            // Мобильное управление
+            let touchLeft = false;
+            let touchRight = false;
+            let touchJump = false;
+
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    const tx = touch.clientX;
+                    const ty = touch.clientY;
+                    const rect = canvas.getBoundingClientRect();
+                    const rx = tx - rect.left;
+                    const ry = ty - rect.top;
+                    const scaleX = W / rect.width;
+                    const scaleY = H / rect.height;
+                    const cx = rx * scaleX;
+                    const cy = ry * scaleY;
+
+                    if (cy > H * 0.6) {
+                        if (cx < W / 3) touchLeft = true;
+                        else if (cx < W * 2 / 3) touchJump = true;
+                        else touchRight = true;
+                    } else {
+                        touchJump = true;
+                    }
+                }
+                keys['ArrowLeft'] = touchLeft;
+                keys['ArrowRight'] = touchRight;
+                if (touchJump) {
+                    keys['Space'] = true;
+                    keys['ArrowUp'] = true;
+                }
+            });
+
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                touchLeft = false;
+                touchRight = false;
+                touchJump = false;
+                keys['ArrowLeft'] = false;
+                keys['ArrowRight'] = false;
+                keys['Space'] = false;
+                keys['ArrowUp'] = false;
+            });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                touchLeft = false;
+                touchRight = false;
+                touchJump = false;
+                for (const touch of e.touches) {
+                    const tx = touch.clientX;
+                    const ty = touch.clientY;
+                    const rect = canvas.getBoundingClientRect();
+                    const rx = tx - rect.left;
+                    const ry = ty - rect.top;
+                    const scaleX = W / rect.width;
+                    const scaleY = H / rect.height;
+                    const cx = rx * scaleX;
+                    const cy = ry * scaleY;
+
+                    if (cy > H * 0.6) {
+                        if (cx < W / 3) touchLeft = true;
+                        else if (cx < W * 2 / 3) touchJump = true;
+                        else touchRight = true;
+                    } else {
+                        touchJump = true;
+                    }
+                }
+                keys['ArrowLeft'] = touchLeft;
+                keys['ArrowRight'] = touchRight;
+                if (touchJump) {
+                    keys['Space'] = true;
+                    keys['ArrowUp'] = true;
+                } else {
+                    keys['Space'] = false;
+                    keys['ArrowUp'] = false;
+                }
+            });
+
+            // --- ЗАПУСК ИГРЫ ---
+            loadLevel(1);
+            gameLoop();
+
+            console.log('🍄 Super Mario - 10 уровней готов!');
+            console.log('Управление: ← → или A/D — движение, ПРОБЕЛ или W/↑ — прыжок, R — рестарт');
+            console.log('Соберите монеты, избегайте врагов, доберитесь до флага!');
+        })();
+    </script>
+</body>
+</html>
